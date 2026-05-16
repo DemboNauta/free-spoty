@@ -13,9 +13,11 @@ import com.freespoty.app.data.repository.MusicRepository
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +48,7 @@ class PlayerController(
     private var controller: MediaController? = null
     private val trackIndex = mutableMapOf<String, Track>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var playJob: Job? = null
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -61,16 +64,24 @@ class PlayerController(
         val token = SessionToken(appContext, ComponentName(appContext, PlayerService::class.java))
         val future = MediaController.Builder(appContext, token).buildAsync()
         future.addListener({
-            controller = future.get()
-            controller?.addListener(listener)
-            refreshFromPlayer()
+            try {
+                controller = future.get()
+                controller?.addListener(listener)
+                refreshFromPlayer()
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(
+                    errorMessage = "No se pudo conectar al reproductor: ${t.message}"
+                )
+            }
         }, MoreExecutors.directExecutor())
     }
 
     fun release() {
+        playJob?.cancel()
         controller?.removeListener(listener)
         controller?.release()
         controller = null
+        scope.cancel()
     }
 
     /**
@@ -81,7 +92,8 @@ class PlayerController(
      */
     fun playTracks(tracks: List<Track>, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
-        scope.launch {
+        playJob?.cancel()
+        playJob = scope.launch {
             _state.value = _state.value.copy(isBuffering = true, errorMessage = null)
             try {
                 trackIndex.clear()

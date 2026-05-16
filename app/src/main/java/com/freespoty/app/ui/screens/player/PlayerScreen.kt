@@ -55,12 +55,13 @@ fun PlayerScreen(onBack: () -> Unit) {
     val track = state.currentTrack
     val coroutineScope = rememberCoroutineScope()
 
-    var position by remember { mutableLongStateOf(state.positionMs) }
+    var position by remember(track?.id) { mutableLongStateOf(state.positionMs) }
     var seeking by remember { mutableStateOf(false) }
     LaunchedEffect(state.isPlaying, track?.id) {
+        position = controller.currentPositionMs()
         while (state.isPlaying && !seeking) {
-            position = controller.currentPositionMs()
             delay(500)
+            position = controller.currentPositionMs()
         }
     }
 

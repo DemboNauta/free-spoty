@@ -11,6 +11,8 @@ import com.freespoty.app.data.db.dao.DownloadDao
 import com.freespoty.app.data.db.entities.DownloadEntry
 import com.freespoty.app.data.db.entities.DownloadStatus
 import com.freespoty.app.data.db.entities.Track
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class DownloadManager(
@@ -55,7 +57,9 @@ class DownloadManager(
     }
 
     suspend fun delete(trackId: String) {
-        downloadDao.findById(trackId)?.localPath?.let { File(it).delete() }
+        withContext(Dispatchers.IO) {
+            downloadDao.findById(trackId)?.localPath?.let { File(it).delete() }
+        }
         downloadDao.deleteById(trackId)
     }
 }

@@ -41,11 +41,12 @@ fun MiniPlayer(onExpand: () -> Unit, modifier: Modifier = Modifier) {
     val state by container.playerController.state.collectAsStateWithLifecycle()
     val current = state.currentTrack ?: return
 
-    var position by remember { mutableLongStateOf(state.positionMs) }
+    var position by remember(current.id) { mutableLongStateOf(state.positionMs) }
     LaunchedEffect(state.isPlaying, current.id) {
+        position = container.playerController.currentPositionMs()
         while (state.isPlaying) {
-            position = container.playerController.currentPositionMs()
             delay(500)
+            position = container.playerController.currentPositionMs()
         }
     }
     val progress = if (state.durationMs > 0) {
