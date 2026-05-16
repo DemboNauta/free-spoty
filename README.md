@@ -7,38 +7,36 @@ Spotify y YouTube. Pensada para uso personal.
 > Esta app extrae contenido de servicios de terceros con sus propios términos. Su uso
 > queda bajo responsabilidad de quien la compila y ejecuta.
 
-## Estado: Fase 1 (MVP)
+## Estado
 
-Lo que ya funciona:
-
+### Fase 1 — MVP local ✅
 - Estructura Android moderna: Kotlin + Jetpack Compose + Material 3.
 - Reproductor con `androidx.media3` (`ExoPlayer` + `MediaSession`).
   - **Controles en pantalla de bloqueo y notificación** (igual que Spotify), gracias a
-    `MediaSessionService`. Play / pause / siguiente / anterior, metadata, artwork.
-  - Manejo de audio focus y "becoming noisy" (auriculares desconectados → pausa).
-- Escaneo de música local del dispositivo vía `MediaStore`.
-- Base de datos local con Room: tracks, playlists y relación tracks↔playlists.
-- Pantallas:
-  - **Inicio**: lista de canciones locales, tap para reproducir.
-  - **Playlists**: crear playlists; abrir detalle y reproducir.
-  - **Reproductor a pantalla completa** con slider y controles grandes.
-  - **Mini-player** persistente en la parte inferior.
-  - Buscar / Descargas (placeholders).
-- Permisos: solicita `READ_MEDIA_AUDIO` (Android 13+) y `POST_NOTIFICATIONS`.
+    `MediaSessionService`.
+  - Audio focus + auto-pausa al desconectar auriculares.
+- Escaneo de música local vía `MediaStore`.
+- Base de datos local con Room.
+- UI: Inicio, Playlists (crear / detalle), Reproductor full screen, mini-player.
 
-## Próximas fases
+### Fase 2 — Streaming + importación ✅
+- Búsqueda en YouTube vía `NewPipeExtractor` (sin API key, sin backend).
+- Reproducción por **streaming** directo en ExoPlayer; la URL de stream se resuelve
+  on-demand cuando una pista remota entra a la cola.
+- **Importación de playlists desde URL pública**:
+  - **Spotify**: la URL pública se traduce al endpoint `embed/playlist/{id}`, se parsea
+    el JSON SSR (`__NEXT_DATA__`) para obtener los tracks (título + artista), y cada
+    uno se empareja con su mejor resultado de YouTube. Sin OAuth.
+  - **YouTube**: las playlists se leen directamente con NewPipeExtractor.
+- "Añadir a playlist" desde resultados de búsqueda.
 
-### Fase 2 — Streaming y búsqueda
-- Búsqueda en YouTube usando `NewPipeExtractor`.
-- Reproducción por streaming de los resultados (sin descarga aún).
-- Importación de playlists:
-  - URL pública de Spotify → scraping de metadatos (nombre/artista) → match en YouTube.
-  - URL de playlist de YouTube → tracks directos.
-
-### Fase 3 — Descargas offline
-- Descargar audio del stream de YouTube a almacenamiento privado de la app.
-- Listado de descargas, gestión de espacio.
-- Reproducción offline transparente cuando la pista ya está descargada.
+### Fase 3 — Descargas offline ✅
+- Descarga vía `WorkManager` + OkHttp a `filesDir/downloads/{trackId}.m4a`.
+- Tabla `downloads` con progreso, estado (QUEUED/RUNNING/COMPLETED/FAILED) y errores.
+- Al completarse la descarga, la pista se marca `DOWNLOADED` y el `MusicRepository` la
+  reproduce desde el archivo local automáticamente — sin lógica especial en la UI.
+- Pantalla **Descargas** con progreso en vivo, cancelar, eliminar.
+- Botón de descarga en pantalla del reproductor y junto a cada resultado de búsqueda.
 
 ## Cómo compilar
 
@@ -58,18 +56,22 @@ El APK queda en `app/build/outputs/apk/debug/`.
 
 ```
 app/src/main/java/com/freespoty/app/
-├── FreeSpotyApp.kt          # Application con AppContainer (DI manual)
-├── MainActivity.kt          # Solicita permisos y monta Compose
-├── di/AppContainer.kt       # Singletons: DB, Repository, PlayerController
+├── FreeSpotyApp.kt          # Application: AppContainer + init NewPipe
+├── MainActivity.kt          # Permisos + Compose root
+├── di/AppContainer.kt       # Singletons (DI manual)
+├── network/                 # NewPipeDownloader (OkHttp)
 ├── data/
-│   ├── db/                  # Room: entities, DAOs, AppDatabase
+│   ├── db/                  # Room: tracks, playlists, downloads
 │   ├── scanner/             # LocalMusicScanner (MediaStore)
+│   ├── source/              # YouTubeSource (search/stream/playlist)
+│   ├── importer/            # PlaylistImporter + SpotifyPlaylistScraper
+│   ├── download/            # DownloadManager + DownloadWorker
 │   └── repository/          # MusicRepository
 ├── player/
 │   ├── PlayerService.kt     # MediaSessionService (notif + lockscreen)
-│   └── PlayerController.kt  # MediaController wrapper para UI
+│   └── PlayerController.kt  # MediaController + stream resolution
 └── ui/
-    ├── theme/               # Compose theme (Material 3, dark green)
+    ├── theme/               # Compose theme (dark green)
     ├── components/          # MiniPlayer, TrackItem
     ├── navigation/          # NavHost + bottom nav
     └── screens/             # home, playlists, player, search, downloads

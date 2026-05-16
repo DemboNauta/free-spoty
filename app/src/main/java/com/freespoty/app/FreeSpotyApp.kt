@@ -1,6 +1,7 @@
 package com.freespoty.app
 
 import android.app.Application
+import com.freespoty.app.data.source.YouTubeSource
 import com.freespoty.app.di.AppContainer
 
 class FreeSpotyApp : Application() {
@@ -11,6 +12,7 @@ class FreeSpotyApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        YouTubeSource.ensureInitialized()
         container.playerController.connect()
     }
 }

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -36,11 +37,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.freespoty.app.data.db.entities.TrackSource
 import com.freespoty.app.ui.rememberAppContainer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +53,7 @@ fun PlayerScreen(onBack: () -> Unit) {
     val controller = container.playerController
     val state by controller.state.collectAsStateWithLifecycle()
     val track = state.currentTrack
+    val coroutineScope = rememberCoroutineScope()
 
     var position by remember { mutableLongStateOf(state.positionMs) }
     var seeking by remember { mutableStateOf(false) }
@@ -158,6 +163,17 @@ fun PlayerScreen(onBack: () -> Unit) {
                 }
                 IconButton(onClick = { controller.next() }, enabled = state.hasNext) {
                     Icon(Icons.Filled.SkipNext, contentDescription = "Siguiente", modifier = Modifier.size(48.dp))
+                }
+            }
+
+            if (track.source == TrackSource.REMOTE) {
+                IconButton(onClick = {
+                    coroutineScope.launch {
+                        container.musicRepository.saveTracks(listOf(track))
+                        container.downloadManager.enqueue(track)
+                    }
+                }) {
+                    Icon(Icons.Outlined.Download, contentDescription = "Descargar para offline")
                 }
             }
         }
