@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">FreeSpoty</string>
+    <string name="tab_home">Inicio</string>
+    <string name="tab_playlists">Playlists</string>
+    <string name="tab_search">Buscar</string>
+    <string name="tab_downloads">Descargas</string>
+    <string name="now_playing">Reproduciendo</string>
+    <string name="play">Reproducir</string>
+    <string name="pause">Pausar</string>
+    <string name="next">Siguiente</string>
+    <string name="previous">Anterior</string>
+    <string name="empty_library_title">No hay canciones</string>
+    <string name="empty_library_subtitle">Concede permisos de audio para escanear tu música local.</string>
+    <string name="grant_permission">Conceder permiso</string>
+    <string name="create_playlist">Crear playlist</string>
+    <string name="playlist_name">Nombre de la playlist</string>
+    <string name="import_playlist">Importar playlist</string>
+    <string name="import_from_spotify_url">Pega URL pública de Spotify o YouTube</string>
+    <string name="import">Importar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="unknown_artist">Artista desconocido</string>
+    <string name="notification_channel_playback">Reproducción</string>
+</resources>
