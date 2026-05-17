@@ -262,7 +262,7 @@ class PlayerController(
     // las sugerencias varían de artista en cada llamada en vez de repetir siempre el mismo.
     private suspend fun appendSimilarFromPlaylist() {
         val excluded = trackIndex.keys.toSet()
-        val artists = originalTracks.mapNotNull { it.artist?.trim().takeIf { s -> s.isNotEmpty() } }.distinct()
+        val artists = originalTracks.mapNotNull { it.artist?.trim()?.takeIf { s -> s.isNotEmpty() } }.distinct()
         if (artists.isEmpty()) return
         val artist = artists[suggestionArtistIndex % artists.size]
         suggestionArtistIndex++
