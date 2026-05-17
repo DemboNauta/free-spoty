@@ -1,12 +1,14 @@
 package com.freespoty.app.data.download
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 import com.freespoty.app.data.db.dao.DownloadDao
 import com.freespoty.app.data.db.entities.DownloadEntry
 import com.freespoty.app.data.db.entities.DownloadStatus
@@ -40,19 +42,27 @@ class DownloadManager(
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
             )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
             .setInputData(Data.Builder().putString(DownloadWorker.KEY_TRACK_ID, track.id).build())
             .addTag(track.id)
             .build()
 
+        // Serialise downloads behind a single queue: YouTube's anti-bot trips when many
+        // stream resolutions hit it in parallel. APPEND_OR_REPLACE chains the new request
+        // after any pending one under the same unique name, so workers run one at a time.
         workManager.enqueueUniqueWork(
-            DownloadWorker.UNIQUE_WORK_PREFIX + track.id,
-            ExistingWorkPolicy.REPLACE,
+            DOWNLOAD_QUEUE_NAME,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             request
         )
     }
 
+    suspend fun enqueueAll(tracks: List<Track>) {
+        tracks.forEach { enqueue(it) }
+    }
+
     suspend fun cancel(trackId: String) {
-        workManager.cancelUniqueWork(DownloadWorker.UNIQUE_WORK_PREFIX + trackId)
+        workManager.cancelAllWorkByTag(trackId)
         downloadDao.deleteById(trackId)
     }
 
@@ -61,5 +71,9 @@ class DownloadManager(
             downloadDao.findById(trackId)?.localPath?.let { File(it).delete() }
         }
         downloadDao.deleteById(trackId)
+    }
+
+    private companion object {
+        const val DOWNLOAD_QUEUE_NAME = "freespoty-download-queue"
     }
 }

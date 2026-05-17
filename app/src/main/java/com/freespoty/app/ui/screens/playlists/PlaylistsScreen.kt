@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material3.AlertDialog
@@ -55,6 +56,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit) {
 
     var showCreate by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<com.freespoty.app.data.db.entities.Playlist?>(null) }
 
     LaunchedEffect(importState) {
         if (importState is ImportUiState.Success) {
@@ -137,6 +139,9 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit) {
                                     )
                                 }
                             }
+                            IconButton(onClick = { pendingDelete = pl }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Eliminar playlist")
+                            }
                         }
                     }
                 }
@@ -150,6 +155,22 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit) {
             onConfirm = { name ->
                 vm.create(name)
                 showCreate = false
+            }
+        )
+    }
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Eliminar playlist") },
+            text = { Text("¿Eliminar \"${target.name}\"? Las canciones no se borrarán.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.delete(target.id)
+                    pendingDelete = null
+                }) { Text("Eliminar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancelar") }
             }
         )
     }

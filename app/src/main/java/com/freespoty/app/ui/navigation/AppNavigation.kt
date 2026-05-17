@@ -33,13 +33,16 @@ fun AppNavigation() {
     val backStack by navController.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
 
-    val showBottomBar = currentRoute in topLevelDestinations.map { it.route }
+    val isTopLevel = currentRoute in topLevelDestinations.map { it.route }
+    val showMiniPlayer = currentRoute != Routes.PLAYER
 
     Scaffold(
         bottomBar = {
-            if (showBottomBar) {
-                Column {
+            Column {
+                if (showMiniPlayer) {
                     MiniPlayer(onExpand = { navController.navigate(Routes.PLAYER) })
+                }
+                if (isTopLevel) {
                     NavigationBar {
                         topLevelDestinations.forEach { dest ->
                             NavigationBarItem(
@@ -75,7 +78,10 @@ private fun AppNavHost(navController: NavHostController) {
         startDestination = TopLevelDestination.Home.route
     ) {
         composable(TopLevelDestination.Home.route) {
-            HomeScreen(onTrackClick = { /* play handled inside */ })
+            HomeScreen(
+                onTrackClick = { /* play handled inside */ },
+                onOpenPlaylist = { id -> navController.navigate(Routes.playlistDetail(id)) }
+            )
         }
         composable(TopLevelDestination.Playlists.route) {
             PlaylistsScreen(

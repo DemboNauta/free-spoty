@@ -23,7 +23,7 @@ class Converters {
 
 @Database(
     entities = [Track::class, Playlist::class, PlaylistTrackCrossRef::class, DownloadEntry::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

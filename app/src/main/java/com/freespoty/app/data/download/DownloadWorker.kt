@@ -1,6 +1,7 @@
 package com.freespoty.app.data.download
 
 import android.content.Context
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.freespoty.app.FreeSpotyApp
@@ -40,7 +41,14 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                     val remoteId = track.remoteId
                         ?: return@withContext failWith(downloadDao, trackId, "Sin ID remoto")
                     YouTubeSource.ensureInitialized()
-                    youtube.resolveStream(remoteId).audioUrl
+                    val resolved = try {
+                        youtube.resolveStream(remoteId)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "resolveStream failed trackId=$trackId remoteId=$remoteId", t)
+                        return@withContext failWith(downloadDao, trackId, "Resolve: ${t.message}")
+                    }
+                    Log.i(TAG, "resolved $trackId mime=${resolved.mimeType} urlLen=${resolved.audioUrl.length}")
+                    resolved.audioUrl
                 }
                 TrackSource.LOCAL, TrackSource.DOWNLOADED ->
                     return@withContext failWith(downloadDao, trackId, "La pista ya es local")
@@ -54,10 +62,16 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build()
-            val request = Request.Builder().url(streamUrl).build()
+            // YouTube media CDN rejects requests without a browser-like User-Agent
+            // (returns 403). Use the same UA as NewPipeDownloader for consistency.
+            val request = Request.Builder()
+                .url(streamUrl)
+                .header("User-Agent", USER_AGENT)
+                .build()
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
+                    Log.w(TAG, "download HTTP ${response.code} trackId=$trackId")
                     return@withContext failWith(downloadDao, trackId, "HTTP ${response.code}")
                 }
                 val body = response.body ?: return@withContext failWith(downloadDao, trackId, "Cuerpo vacío")
@@ -99,7 +113,17 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
             downloadDao.markCompleted(trackId, targetFile.absolutePath)
             Result.success()
         } catch (t: Throwable) {
-            failWith(downloadDao, trackId, t.message ?: "Error desconocido")
+            // Network hiccups (connection reset, timeout, stream URL revoked) are
+            // transient — WorkManager retries with exponential backoff up to
+            // [MAX_ATTEMPTS]. Past that we mark FAILED so the UI surfaces it.
+            val transient = t is java.io.IOException
+            if (transient && runAttemptCount < MAX_ATTEMPTS - 1) {
+                Log.w(TAG, "RETRY $trackId (attempt ${runAttemptCount + 1}): ${t.message}")
+                downloadDao.updateProgress(trackId, DownloadStatus.QUEUED, 0)
+                Result.retry()
+            } else {
+                failWith(downloadDao, trackId, t.message ?: "Error desconocido")
+            }
         }
     }
 
@@ -108,6 +132,7 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
         trackId: String,
         message: String
     ): Result {
+        Log.w(TAG, "FAIL $trackId: $message")
         dao.markFailed(trackId, error = message)
         return Result.failure()
     }
@@ -115,5 +140,9 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
     companion object {
         const val KEY_TRACK_ID = "track_id"
         const val UNIQUE_WORK_PREFIX = "download-"
+        const val MAX_ATTEMPTS = 4
+        private const val TAG = "DownloadWorker"
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
     }
 }

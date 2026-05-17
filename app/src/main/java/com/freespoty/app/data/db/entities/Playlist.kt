@@ -10,5 +10,6 @@ data class Playlist(
     val description: String? = null,
     val artworkUri: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val importedFrom: String? = null
+    val importedFrom: String? = null,
+    val isPreview: Boolean = false
 )

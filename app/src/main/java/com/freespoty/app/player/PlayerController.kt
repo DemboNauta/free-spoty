@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -15,10 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +31,7 @@ data class PlayerUiState(
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
     val isBuffering: Boolean = false,
+    val shuffleEnabled: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -49,6 +48,10 @@ class PlayerController(
     private val trackIndex = mutableMapOf<String, Track>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var playJob: Job? = null
+    private var autoQueueJob: Job? = null
+    private var lastAutoSeedId: String? = null
+
+    var autoQueueEnabled: Boolean = true
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -56,6 +59,20 @@ class PlayerController(
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             refreshFromPlayer()
+        }
+
+        // Si un item falla (URL stale, bot block, 403…), saltar al siguiente en vez de pausar.
+        // NO manejamos STATE_ENDED aquí: ExoPlayer transiciona auto al siguiente cuando hay,
+        // y un seekToNextMediaItem extra desincroniza notification/player (muestra item B
+        // mientras suena C). Recovery de "current acabó sin siguiente en timeline" se hace
+        // tras el addMediaItem de background en playTracks.
+        override fun onPlayerError(error: PlaybackException) {
+            val c = controller ?: return
+            if (c.hasNextMediaItem()) {
+                c.seekToNextMediaItem()
+                c.prepare()
+                c.play()
+            }
         }
     }
 
@@ -85,34 +102,49 @@ class PlayerController(
     }
 
     /**
-     * Replaces the current queue and starts at [startIndex]. Remote tracks have their
-     * stream URLs resolved on a background thread before media items are submitted.
-     * Resolution runs concurrently (capped) so a 50-track playlist doesn't serialize
-     * 50 HTTP roundtrips.
+     * Replaces the current queue and starts at [startIndex]. Resolves the initial track first
+     * para arrancar reproducción ya; el resto se resuelve secuencialmente en background y se
+     * añade a la timeline en orden. ExoPlayer pre-bufferea el siguiente item automáticamente
+     * → transición sin pausa. Secuencial evita que N resoluciones de YouTube en paralelo
+     * disparen el bot block. Sin auto-descarga: el usuario decide qué guardar.
      */
     fun playTracks(tracks: List<Track>, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
+        val safeStart = startIndex.coerceIn(0, tracks.lastIndex)
         playJob?.cancel()
+        autoQueueJob?.cancel()
+        lastAutoSeedId = null
+        trackIndex.clear()
+        tracks.forEach { trackIndex[it.id] = it }
         playJob = scope.launch {
             _state.value = _state.value.copy(isBuffering = true, errorMessage = null)
             try {
-                trackIndex.clear()
-                tracks.forEach { trackIndex[it.id] = it }
-                val items = withContext(Dispatchers.IO) {
-                    coroutineScope {
-                        tracks.map { track ->
-                            async {
-                                val playableUri = runCatching { repository.resolvePlayableUri(track) }
-                                    .getOrDefault(track.uri)
-                                track.toMediaItem(playableUri)
-                            }
-                        }.awaitAll()
-                    }
+                // Pre-resolver hasta 3 items (current + 2 siguientes) antes de arrancar:
+                // garantiza que el player tiene siguiente en timeline cuando termine el actual,
+                // incluso para tracks muy cortos donde la resolución background no llegaría a tiempo.
+                val initialBatch = tracks.subList(safeStart, minOf(safeStart + 3, tracks.size))
+                val initialItems = mutableListOf<MediaItem>()
+                for (t in initialBatch) {
+                    initialItems += withContext(Dispatchers.IO) { resolveMediaItem(t) }
                 }
                 val c = controller ?: return@launch
-                c.setMediaItems(items, startIndex, 0L)
+                c.setMediaItems(initialItems, 0, 0L)
                 c.prepare()
                 c.playWhenReady = true
+
+                // Resto secuencial: primero los que van DESPUÉS del batch inicial, después los previos.
+                val after = tracks.subList(safeStart + initialBatch.size, tracks.size)
+                val before = tracks.subList(0, safeStart)
+                for (t in after) {
+                    val item = withContext(Dispatchers.IO) { resolveMediaItem(t) }
+                    val ctrl = controller ?: return@launch
+                    ctrl.addMediaItem(item)
+                    rescueIfEnded(ctrl)
+                }
+                for ((i, t) in before.withIndex()) {
+                    val item = withContext(Dispatchers.IO) { resolveMediaItem(t) }
+                    controller?.addMediaItem(i, item) ?: return@launch
+                }
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(
                     isBuffering = false,
@@ -120,6 +152,20 @@ class PlayerController(
                 )
             }
         }
+    }
+
+    // Si el current acabó (STATE_ENDED) y NO había siguiente en timeline, ExoPlayer
+    // queda parado. Cuando llega el item del background, hay que arrancarlo manualmente.
+    private fun rescueIfEnded(c: MediaController) {
+        if (c.playbackState == Player.STATE_ENDED && c.hasNextMediaItem()) {
+            c.seekToNextMediaItem()
+            c.play()
+        }
+    }
+
+    private suspend fun resolveMediaItem(track: Track): MediaItem {
+        val uri = runCatching { repository.resolvePlayableUri(track) }.getOrDefault(track.uri)
+        return track.toMediaItem(uri)
     }
 
     fun togglePlayPause() {
@@ -130,6 +176,11 @@ class PlayerController(
     fun next() = controller?.seekToNextMediaItem()
     fun previous() = controller?.seekToPreviousMediaItem()
     fun seekTo(ms: Long) = controller?.seekTo(ms)
+
+    fun toggleShuffle() {
+        val c = controller ?: return
+        c.shuffleModeEnabled = !c.shuffleModeEnabled
+    }
 
     fun currentPositionMs(): Long = controller?.currentPosition ?: 0L
 
@@ -145,8 +196,34 @@ class PlayerController(
             durationMs = c.duration.takeIf { it > 0 } ?: track?.durationMs ?: 0L,
             hasNext = c.hasNextMediaItem(),
             hasPrevious = c.hasPreviousMediaItem(),
-            isBuffering = c.playbackState == Player.STATE_BUFFERING
+            isBuffering = c.playbackState == Player.STATE_BUFFERING,
+            shuffleEnabled = c.shuffleModeEnabled
         )
+        maybeAutoQueue(c, track)
+    }
+
+    private fun maybeAutoQueue(c: MediaController, current: Track?) {
+        if (!autoQueueEnabled || current == null) return
+        if (current.id == lastAutoSeedId) return
+        val remaining = c.mediaItemCount - c.currentMediaItemIndex - 1
+        if (remaining > 1) return
+        lastAutoSeedId = current.id
+        autoQueueJob?.cancel()
+        autoQueueJob = scope.launch { appendSimilar(current) }
+    }
+
+    private suspend fun appendSimilar(seed: Track) {
+        val excluded = trackIndex.keys.toSet()
+        val similar = runCatching {
+            repository.similarTo(seed, excluded, limit = 5)
+        }.getOrNull().orEmpty()
+        if (similar.isEmpty()) return
+        // Secuencial: paralelizar resolveStream dispara bot block en YouTube.
+        for (t in similar) {
+            val item = withContext(Dispatchers.IO) { resolveMediaItem(t) }
+            trackIndex[t.id] = t
+            controller?.addMediaItem(item) ?: return
+        }
     }
 
     private fun Track.toMediaItem(playableUri: String): MediaItem {

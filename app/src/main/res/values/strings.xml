@@ -16,8 +16,13 @@
     <string name="playlist_name">Nombre de la playlist</string>
     <string name="import_playlist">Importar playlist</string>
     <string name="import_from_spotify_url">Pega URL pública de Spotify o YouTube</string>
-    <string name="import">Importar</string>
+    <string name="action_import">Importar</string>
     <string name="cancel">Cancelar</string>
     <string name="unknown_artist">Artista desconocido</string>
     <string name="notification_channel_playback">Reproducción</string>
+    <string name="discover_section">Descubre</string>
+    <string name="home_playlists_section">Tus playlists</string>
+    <string name="home_recent_section">Añadidas recientemente</string>
+    <string name="home_no_playlists">Aún no tienes playlists. Importa o crea una.</string>
+    <string name="action_rescan">Re-escanear</string>
 </resources>

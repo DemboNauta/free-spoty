@@ -36,6 +36,11 @@ class PlayerService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+            .apply {
+                pauseAtEndOfMediaItems = false
+                // Pre-buffer next item ~30s antes de transición.
+                preloadConfiguration = ExoPlayer.PreloadConfiguration(30_000_000L)
+            }
 
         val sessionActivityPendingIntent = PendingIntent.getActivity(
             this,

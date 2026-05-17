@@ -10,7 +10,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.Downloading
+import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.freespoty.app.data.db.entities.DownloadStatus
 import com.freespoty.app.data.db.entities.Track
 
 @Composable
@@ -28,7 +34,9 @@ fun TrackItem(
     track: Track,
     isPlaying: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    downloadStatus: DownloadStatus? = null,
+    downloadProgress: Int = 0
 ) {
     Row(
         modifier = modifier
@@ -78,5 +86,45 @@ fun TrackItem(
                 overflow = TextOverflow.Ellipsis
             )
         }
+        DownloadIndicator(status = downloadStatus, progress = downloadProgress)
+    }
+}
+
+@Composable
+private fun DownloadIndicator(status: DownloadStatus?, progress: Int) {
+    when (status) {
+        DownloadStatus.COMPLETED -> Icon(
+            imageVector = Icons.Outlined.CloudDone,
+            contentDescription = "Descargada",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp)
+        )
+        DownloadStatus.RUNNING -> if (progress in 1..99) {
+            CircularProgressIndicator(
+                progress = { progress / 100f },
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Outlined.Downloading,
+                contentDescription = "Descargando",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        DownloadStatus.QUEUED -> Icon(
+            imageVector = Icons.Outlined.HourglassEmpty,
+            contentDescription = "En cola",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        DownloadStatus.FAILED -> Icon(
+            imageVector = Icons.Outlined.CloudOff,
+            contentDescription = "Fallo descarga",
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(20.dp)
+        )
+        null -> {}
     }
 }

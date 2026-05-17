@@ -5,6 +5,9 @@
 !/.idea/codeStyles
 .DS_Store
 /build
+**/build/
+*.apk
+*.aab
 /captures
 .externalNativeBuild
 .cxx

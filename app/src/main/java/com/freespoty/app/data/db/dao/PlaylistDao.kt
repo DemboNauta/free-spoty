@@ -25,6 +25,12 @@ interface PlaylistDao {
     @Query("DELETE FROM playlists WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("UPDATE playlists SET isPreview = 0 WHERE id = :id")
+    suspend fun markSaved(id: Long)
+
+    @Query("DELETE FROM playlists WHERE isPreview = 1")
+    suspend fun deleteAllPreviews()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addCrossRef(ref: PlaylistTrackCrossRef)
 

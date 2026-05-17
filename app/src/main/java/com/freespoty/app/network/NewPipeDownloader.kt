@@ -1,5 +1,6 @@
 package com.freespoty.app.network
 
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -34,10 +35,21 @@ class NewPipeDownloader : Downloader() {
             values.forEach { v -> builder.addHeader(name, v) }
         }
 
-        // NewPipe doesn't always set a User-Agent; YouTube blocks empty UAs.
         if (request.headers()["User-Agent"].isNullOrEmpty()) {
             builder.header("User-Agent", USER_AGENT)
         }
+        // Bypass YouTube's EU consent wall (which replaces the normal HTML with a
+        // consent.youtube.com page that has no `ytInitialData`). NewPipe app uses the
+        // same trick: pre-set the consent cookie so we get the regular video page.
+        val existingCookie = request.headers()["Cookie"]?.firstOrNull().orEmpty()
+        val mergedCookie = if (existingCookie.contains("CONSENT=")) {
+            existingCookie
+        } else if (existingCookie.isBlank()) {
+            CONSENT_COOKIE
+        } else {
+            "$existingCookie; $CONSENT_COOKIE"
+        }
+        builder.header("Cookie", mergedCookie)
 
         val body = dataToSend?.toRequestBody(null)
         builder.method(httpMethod, body)
@@ -48,6 +60,14 @@ class NewPipeDownloader : Downloader() {
                     throw ReCaptchaException("reCaptcha required", url)
                 }
                 val bodyString = response.body?.string() ?: ""
+                if (response.code !in 200..299) {
+                    Log.w(TAG, "HTTP ${response.code} for $url")
+                } else if (url.contains("youtube.com/results") || url.contains("youtube.com/watch")) {
+                    val hasInitial = bodyString.contains("ytInitialData")
+                    val isConsent = bodyString.contains("consent.youtube.com") ||
+                        response.request.url.host.contains("consent")
+                    Log.i(TAG, "GET $url -> ${response.code}, len=${bodyString.length}, ytInitialData=$hasInitial, consentWall=$isConsent, finalUrl=${response.request.url}")
+                }
                 return NpResponse(
                     response.code,
                     response.message,
@@ -57,12 +77,17 @@ class NewPipeDownloader : Downloader() {
                 )
             }
         } catch (e: IOException) {
+            Log.w(TAG, "Network error for $url: ${e.message}")
             throw IOException("Network error: ${e.message}", e)
         }
     }
 
     companion object {
+        private const val TAG = "NewPipeDownloader"
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
+        // PENDING+ marks an opt-out from personalised tracking; YES+ accepts it. Either
+        // works to skip the EU consent wall. We use PENDING to minimise tracking.
+        private const val CONSENT_COOKIE = "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODE1LjA0X3AwGgJlbiACGgYIgL_KpwY"
     }
 }

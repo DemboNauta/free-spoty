@@ -7,7 +7,9 @@ import com.freespoty.app.data.db.entities.Playlist
 import com.freespoty.app.data.db.entities.PlaylistTrackCrossRef
 import com.freespoty.app.data.db.entities.Track
 import com.freespoty.app.data.db.entities.TrackSource
+import com.freespoty.app.data.recommendation.RecommendationEngine
 import com.freespoty.app.data.scanner.LocalMusicScanner
+import com.freespoty.app.data.source.DiscoverPlaylist
 import com.freespoty.app.data.source.YouTubeSource
 import kotlinx.coroutines.flow.Flow
 import java.io.File
@@ -16,7 +18,8 @@ class MusicRepository(
     private val trackDao: TrackDao,
     private val playlistDao: PlaylistDao,
     private val scanner: LocalMusicScanner,
-    private val youtubeSource: YouTubeSource
+    private val youtubeSource: YouTubeSource,
+    private val recommender: RecommendationEngine
 ) {
     fun observeTracks(): Flow<List<Track>> = trackDao.observeAll()
 
@@ -59,6 +62,49 @@ class MusicRepository(
         playlistDao.removeTrack(playlistId, trackId)
 
     suspend fun saveTracks(tracks: List<Track>) = trackDao.upsertAll(tracks)
+
+    suspend fun markPlaylistSaved(id: Long) = playlistDao.markSaved(id)
+
+    suspend fun purgePreviewPlaylists() = playlistDao.deleteAllPreviews()
+
+    suspend fun discoverPlaylists(seed: Track, limit: Int = 8): List<DiscoverPlaylist> =
+        recommender.discoverPlaylists(seed, limit)
+
+    /**
+     * Importa una playlist remota como preview (no guardada). Fetch tracks de YouTube,
+     * crea Playlist con isPreview=true. Devuelve playlistId o null si falla.
+     */
+    suspend fun importPreviewPlaylist(disc: DiscoverPlaylist): Pair<Long, List<Track>>? {
+        val (_, tracks) = runCatching { youtubeSource.fetchPlaylist(disc.url) }
+            .getOrNull() ?: return null
+        if (tracks.isEmpty()) return null
+        trackDao.upsertAll(tracks)
+        val playlistId = playlistDao.insert(
+            Playlist(
+                name = disc.name,
+                description = disc.uploader,
+                artworkUri = disc.thumbnailUrl,
+                importedFrom = "Descubre",
+                isPreview = true
+            )
+        )
+        addTracksToPlaylist(playlistId, tracks.map { it.id })
+        return playlistId to tracks
+    }
+
+    /**
+     * Devuelve tracks similares a [seed] basados en el artista. Los resultados se
+     * persisten en la base de datos para poder reproducirlos después sin re-buscar.
+     */
+    suspend fun similarTo(
+        seed: Track,
+        exclude: Set<String> = emptySet(),
+        limit: Int = 5
+    ): List<Track> {
+        val results = recommender.similarTo(seed, exclude, limit)
+        if (results.isNotEmpty()) trackDao.upsertAll(results)
+        return results
+    }
 
     /**
      * For tracks that originate from a remote service, the stored `uri` is the watch URL
