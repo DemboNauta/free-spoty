@@ -56,6 +56,7 @@ class PlayerController(
     private var originalTracks = listOf<Track>()
     private var endedHandled = false
     private val _loopMode = MutableStateFlow(LoopMode.NONE)
+    private var suggestionArtistIndex = 0
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -121,6 +122,7 @@ class PlayerController(
         autoQueueJob?.cancel()
         lastAutoSeedId = null
         endedHandled = false
+        suggestionArtistIndex = 0
         trackIndex.clear()
         tracks.forEach { trackIndex[it.id] = it }
         playJob = scope.launch {
@@ -189,6 +191,7 @@ class PlayerController(
     fun seekTo(ms: Long) = controller?.seekTo(ms)
 
     fun cycleLoopMode() {
+        val c = controller ?: return
         val next = when (_loopMode.value) {
             LoopMode.NONE -> LoopMode.SEQUENTIAL
             LoopMode.SEQUENTIAL -> LoopMode.SHUFFLE
@@ -196,6 +199,8 @@ class PlayerController(
             LoopMode.SUGGESTIONS -> LoopMode.NONE
         }
         _loopMode.value = next
+        // SHUFFLE usa el modo nativo de ExoPlayer para aleatorizar el orden durante la reproducción.
+        c.shuffleModeEnabled = (next == LoopMode.SHUFFLE)
         refreshFromPlayer()
     }
 
@@ -253,11 +258,15 @@ class PlayerController(
         autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
     }
 
-    // Uses a random artist from the original playlist as seed for variety, instead of
-    // always following from just the currently playing track.
+    // Rota por cada artista distinto de la playlist original en orden circular, de forma que
+    // las sugerencias varían de artista en cada llamada en vez de repetir siempre el mismo.
     private suspend fun appendSimilarFromPlaylist() {
         val excluded = trackIndex.keys.toSet()
-        val seed = originalTracks.filter { it.artist != null }.randomOrNull() ?: return
+        val artists = originalTracks.mapNotNull { it.artist?.trim().takeIf { s -> s.isNotEmpty() } }.distinct()
+        if (artists.isEmpty()) return
+        val artist = artists[suggestionArtistIndex % artists.size]
+        suggestionArtistIndex++
+        val seed = originalTracks.firstOrNull { it.artist?.trim() == artist } ?: return
         val similar = runCatching {
             repository.similarTo(seed, excluded, limit = 5)
         }.getOrNull().orEmpty()
