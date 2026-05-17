@@ -1,0 +1,56 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [main, master, claude/**]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml') }}
+          restore-keys: gradle-
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon --no-configuration-cache --no-build-cache
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreeSpoty-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "FreeSpoty debug build #${{ github.run_number }}"
+          body: |
+            APK de debug generado automáticamente desde `${{ github.ref_name }}`.
+
+            **Instalar en Android:**
+            1. Descarga `app-debug.apk`
+            2. Abre el archivo en tu móvil (habilita «Instalar desde fuentes desconocidas» si es necesario)
+          files: app/build/outputs/apk/debug/app-debug.apk
+          prerelease: true

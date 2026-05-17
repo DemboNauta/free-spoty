@@ -15,10 +15,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stars
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.freespoty.app.data.db.entities.TrackSource
+import com.freespoty.app.player.LoopMode
 import com.freespoty.app.ui.rememberAppContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -153,14 +155,14 @@ fun PlayerScreen(onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { controller.toggleShuffle() }) {
-                    Icon(
-                        imageVector = if (state.shuffleEnabled) Icons.Filled.ShuffleOn else Icons.Filled.Shuffle,
-                        contentDescription = "Aleatorio",
-                        tint = if (state.shuffleEnabled) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(32.dp)
-                    )
+                IconButton(onClick = { controller.cycleLoopMode() }) {
+                    val (icon, tint, desc) = when (state.loopMode) {
+                        LoopMode.NONE -> Triple(Icons.Filled.Repeat, MaterialTheme.colorScheme.onSurfaceVariant, "Sin bucle")
+                        LoopMode.SEQUENTIAL -> Triple(Icons.Filled.Repeat, MaterialTheme.colorScheme.primary, "Bucle secuencial")
+                        LoopMode.SHUFFLE -> Triple(Icons.Filled.Shuffle, MaterialTheme.colorScheme.primary, "Bucle aleatorio")
+                        LoopMode.SUGGESTIONS -> Triple(Icons.Filled.Stars, MaterialTheme.colorScheme.primary, "Sugerencias")
+                    }
+                    Icon(imageVector = icon, contentDescription = desc, tint = tint, modifier = Modifier.size(32.dp))
                 }
                 IconButton(onClick = { controller.previous() }, enabled = state.hasPrevious) {
                     Icon(Icons.Filled.SkipPrevious, contentDescription = "Anterior", modifier = Modifier.size(48.dp))
