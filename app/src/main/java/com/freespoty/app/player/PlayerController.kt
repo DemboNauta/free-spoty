@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+enum class LoopMode { NONE, SEQUENTIAL, SHUFFLE, SUGGESTIONS }
+
 data class PlayerUiState(
     val isPlaying: Boolean = false,
     val currentTrack: Track? = null,
@@ -31,7 +33,7 @@ data class PlayerUiState(
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
     val isBuffering: Boolean = false,
-    val shuffleEnabled: Boolean = false,
+    val loopMode: LoopMode = LoopMode.NONE,
     val errorMessage: String? = null
 )
 
@@ -51,7 +53,9 @@ class PlayerController(
     private var autoQueueJob: Job? = null
     private var lastAutoSeedId: String? = null
 
-    var autoQueueEnabled: Boolean = true
+    private var originalTracks = listOf<Track>()
+    private var endedHandled = false
+    private val _loopMode = MutableStateFlow(LoopMode.NONE)
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -65,7 +69,7 @@ class PlayerController(
         // NO manejamos STATE_ENDED aquí: ExoPlayer transiciona auto al siguiente cuando hay,
         // y un seekToNextMediaItem extra desincroniza notification/player (muestra item B
         // mientras suena C). Recovery de "current acabó sin siguiente en timeline" se hace
-        // tras el addMediaItem de background en playTracks.
+        // tras el addMediaItem de background en startPlayback.
         override fun onPlayerError(error: PlaybackException) {
             val c = controller ?: return
             if (c.hasNextMediaItem()) {
@@ -102,26 +106,27 @@ class PlayerController(
     }
 
     /**
-     * Replaces the current queue and starts at [startIndex]. Resolves the initial track first
-     * para arrancar reproducción ya; el resto se resuelve secuencialmente en background y se
-     * añade a la timeline en orden. ExoPlayer pre-bufferea el siguiente item automáticamente
-     * → transición sin pausa. Secuencial evita que N resoluciones de YouTube en paralelo
-     * disparen el bot block. Sin auto-descarga: el usuario decide qué guardar.
+     * Replaces the current queue and starts at [startIndex]. Saves [tracks] as the canonical
+     * playlist for loop-mode restarts.
      */
     fun playTracks(tracks: List<Track>, startIndex: Int = 0) {
+        originalTracks = tracks
+        startPlayback(tracks, startIndex)
+    }
+
+    private fun startPlayback(tracks: List<Track>, startIndex: Int) {
         if (tracks.isEmpty()) return
         val safeStart = startIndex.coerceIn(0, tracks.lastIndex)
         playJob?.cancel()
         autoQueueJob?.cancel()
         lastAutoSeedId = null
+        endedHandled = false
         trackIndex.clear()
         tracks.forEach { trackIndex[it.id] = it }
         playJob = scope.launch {
             _state.value = _state.value.copy(isBuffering = true, errorMessage = null)
             try {
-                // Pre-resolver hasta 3 items (current + 2 siguientes) antes de arrancar:
-                // garantiza que el player tiene siguiente en timeline cuando termine el actual,
-                // incluso para tracks muy cortos donde la resolución background no llegaría a tiempo.
+                // Pre-resolver hasta 3 items (current + 2 siguientes) antes de arrancar.
                 val initialBatch = tracks.subList(safeStart, minOf(safeStart + 3, tracks.size))
                 val initialItems = mutableListOf<MediaItem>()
                 for (t in initialBatch) {
@@ -132,7 +137,6 @@ class PlayerController(
                 c.prepare()
                 c.playWhenReady = true
 
-                // Resto secuencial: primero los que van DESPUÉS del batch inicial, después los previos.
                 val after = tracks.subList(safeStart + initialBatch.size, tracks.size)
                 val before = tracks.subList(0, safeStart)
                 for (t in after) {
@@ -152,6 +156,13 @@ class PlayerController(
                 )
             }
         }
+    }
+
+    private fun restartPlaylist() {
+        if (originalTracks.isEmpty()) return
+        val tracks = if (_loopMode.value == LoopMode.SHUFFLE) originalTracks.shuffled()
+                     else originalTracks
+        startPlayback(tracks, 0)
     }
 
     // Si el current acabó (STATE_ENDED) y NO había siguiente en timeline, ExoPlayer
@@ -177,9 +188,15 @@ class PlayerController(
     fun previous() = controller?.seekToPreviousMediaItem()
     fun seekTo(ms: Long) = controller?.seekTo(ms)
 
-    fun toggleShuffle() {
-        val c = controller ?: return
-        c.shuffleModeEnabled = !c.shuffleModeEnabled
+    fun cycleLoopMode() {
+        val next = when (_loopMode.value) {
+            LoopMode.NONE -> LoopMode.SEQUENTIAL
+            LoopMode.SEQUENTIAL -> LoopMode.SHUFFLE
+            LoopMode.SHUFFLE -> LoopMode.SUGGESTIONS
+            LoopMode.SUGGESTIONS -> LoopMode.NONE
+        }
+        _loopMode.value = next
+        refreshFromPlayer()
     }
 
     fun currentPositionMs(): Long = controller?.currentPosition ?: 0L
@@ -189,6 +206,8 @@ class PlayerController(
         val item = c.currentMediaItem
         val trackId = item?.mediaId
         val track = trackId?.let { trackIndex[it] }
+        val loopMode = _loopMode.value
+
         _state.value = _state.value.copy(
             isPlaying = c.isPlaying,
             currentTrack = track,
@@ -197,32 +216,58 @@ class PlayerController(
             hasNext = c.hasNextMediaItem(),
             hasPrevious = c.hasPreviousMediaItem(),
             isBuffering = c.playbackState == Player.STATE_BUFFERING,
-            shuffleEnabled = c.shuffleModeEnabled
+            loopMode = loopMode
         )
+
+        // Detect end-of-queue and act according to loop mode.
+        // Guard with endedHandled to avoid re-triggering on repeated onEvents while STATE_ENDED.
+        if (c.playbackState == Player.STATE_ENDED && !c.hasNextMediaItem()) {
+            if (!endedHandled) {
+                endedHandled = true
+                when (loopMode) {
+                    LoopMode.SEQUENTIAL, LoopMode.SHUFFLE -> restartPlaylist()
+                    LoopMode.SUGGESTIONS -> {
+                        // Reset seed lock so appendSimilarFromPlaylist can fire a fresh search
+                        lastAutoSeedId = null
+                        autoQueueJob?.cancel()
+                        autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
+                    }
+                    LoopMode.NONE -> Unit
+                }
+            }
+        } else if (c.playbackState != Player.STATE_ENDED) {
+            endedHandled = false
+        }
+
         maybeAutoQueue(c, track)
     }
 
     private fun maybeAutoQueue(c: MediaController, current: Track?) {
-        if (!autoQueueEnabled || current == null) return
+        if (_loopMode.value != LoopMode.SUGGESTIONS) return
+        if (current == null) return
         if (current.id == lastAutoSeedId) return
         val remaining = c.mediaItemCount - c.currentMediaItemIndex - 1
         if (remaining > 1) return
         lastAutoSeedId = current.id
         autoQueueJob?.cancel()
-        autoQueueJob = scope.launch { appendSimilar(current) }
+        autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
     }
 
-    private suspend fun appendSimilar(seed: Track) {
+    // Uses a random artist from the original playlist as seed for variety, instead of
+    // always following from just the currently playing track.
+    private suspend fun appendSimilarFromPlaylist() {
         val excluded = trackIndex.keys.toSet()
+        val seed = originalTracks.filter { it.artist != null }.randomOrNull() ?: return
         val similar = runCatching {
             repository.similarTo(seed, excluded, limit = 5)
         }.getOrNull().orEmpty()
         if (similar.isEmpty()) return
-        // Secuencial: paralelizar resolveStream dispara bot block en YouTube.
         for (t in similar) {
             val item = withContext(Dispatchers.IO) { resolveMediaItem(t) }
             trackIndex[t.id] = t
-            controller?.addMediaItem(item) ?: return
+            val ctrl = controller ?: return
+            ctrl.addMediaItem(item)
+            rescueIfEnded(ctrl)
         }
     }
 
@@ -242,5 +287,4 @@ class PlayerController(
             .setMediaMetadata(metadata)
             .build()
     }
-
 }
