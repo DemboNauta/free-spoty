@@ -51,6 +51,10 @@ class NewPipeDownloader : Downloader() {
         }
         builder.header("Cookie", mergedCookie)
 
+        if (restrictedMode) {
+            builder.header("YouTube-Restrict", "Strict")
+        }
+
         val body = dataToSend?.toRequestBody(null)
         builder.method(httpMethod, body)
 
@@ -84,6 +88,9 @@ class NewPipeDownloader : Downloader() {
 
     companion object {
         private const val TAG = "NewPipeDownloader"
+
+        // Updated by AppContainer whenever the kids-mode preference changes.
+        @Volatile var restrictedMode: Boolean = false
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36"
         // PENDING+ marks an opt-out from personalised tracking; YES+ accepts it. Either

@@ -26,6 +26,7 @@ import com.freespoty.app.ui.screens.player.PlayerScreen
 import com.freespoty.app.ui.screens.playlists.PlaylistDetailScreen
 import com.freespoty.app.ui.screens.playlists.PlaylistsScreen
 import com.freespoty.app.ui.screens.search.SearchScreen
+import com.freespoty.app.ui.screens.settings.SettingsScreen
 
 @Composable
 fun AppNavigation() {
@@ -93,6 +94,9 @@ private fun AppNavHost(navController: NavHostController) {
         }
         composable(TopLevelDestination.Downloads.route) {
             DownloadsScreen()
+        }
+        composable(TopLevelDestination.Settings.route) {
+            SettingsScreen()
         }
         composable(
             route = Routes.PLAYLIST_DETAIL,
