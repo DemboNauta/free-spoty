@@ -25,6 +25,12 @@ interface TrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(track: Track)
 
+    // UPDATE directo: evita REPLACE → DELETE+INSERT que dispararía CASCADE
+    // en playlist_tracks (FK onDelete=CASCADE) y borraría el track de todas
+    // las playlists al marcarlo como descargado.
+    @Query("UPDATE tracks SET uri = :uri, source = :source WHERE id = :id")
+    suspend fun updateLocalSource(id: String, uri: String, source: com.freespoty.app.data.db.entities.TrackSource)
+
     @Query("DELETE FROM tracks WHERE id = :id")
     suspend fun deleteById(id: String)
 }

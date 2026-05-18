@@ -124,13 +124,9 @@ class MusicRepository(
 
     /** Persist a remote track as DOWNLOADED, pointing at the local file. */
     suspend fun markTrackDownloaded(trackId: String, localPath: String) {
-        val existing = trackDao.findById(trackId) ?: return
         val localUri = Uri.fromFile(File(localPath)).toString()
-        trackDao.upsert(
-            existing.copy(
-                uri = localUri,
-                source = TrackSource.DOWNLOADED
-            )
-        )
+        // NO usar upsert(REPLACE): cascadea sobre playlist_tracks (FK onDelete=CASCADE)
+        // y borra el track de todas las playlists.
+        trackDao.updateLocalSource(trackId, localUri, TrackSource.DOWNLOADED)
     }
 }

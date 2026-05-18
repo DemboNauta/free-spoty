@@ -128,18 +128,16 @@ class PlayerController(
         playJob = scope.launch {
             _state.value = _state.value.copy(isBuffering = true, errorMessage = null)
             try {
-                // Pre-resolver hasta 3 items (current + 2 siguientes) antes de arrancar.
-                val initialBatch = tracks.subList(safeStart, minOf(safeStart + 3, tracks.size))
-                val initialItems = mutableListOf<MediaItem>()
-                for (t in initialBatch) {
-                    initialItems += withContext(Dispatchers.IO) { resolveMediaItem(t) }
-                }
+                // Resolver SOLO current antes de play → arranque inmediato.
+                // Resto se resuelve en bg y se append al timeline.
+                val firstTrack = tracks[safeStart]
+                val firstItem = withContext(Dispatchers.IO) { resolveMediaItem(firstTrack) }
                 val c = controller ?: return@launch
-                c.setMediaItems(initialItems, 0, 0L)
+                c.setMediaItems(listOf(firstItem), 0, 0L)
                 c.prepare()
                 c.playWhenReady = true
 
-                val after = tracks.subList(safeStart + initialBatch.size, tracks.size)
+                val after = tracks.subList(safeStart + 1, tracks.size)
                 val before = tracks.subList(0, safeStart)
                 for (t in after) {
                     val item = withContext(Dispatchers.IO) { resolveMediaItem(t) }
