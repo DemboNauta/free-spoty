@@ -1,6 +1,7 @@
 package com.freespoty.app.ui.screens.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,12 +17,17 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stars
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,8 +50,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.freespoty.app.data.db.entities.DownloadStatus
 import com.freespoty.app.data.db.entities.TrackSource
-import com.freespoty.app.player.LoopMode
+import com.freespoty.app.player.RepeatMode
 import com.freespoty.app.ui.rememberAppContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -155,14 +162,14 @@ fun PlayerScreen(onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { controller.cycleLoopMode() }) {
-                    val (icon, tint, desc) = when (state.loopMode) {
-                        LoopMode.NONE -> Triple(Icons.Filled.Repeat, MaterialTheme.colorScheme.onSurfaceVariant, "Sin bucle")
-                        LoopMode.SEQUENTIAL -> Triple(Icons.Filled.Repeat, MaterialTheme.colorScheme.primary, "Bucle secuencial")
-                        LoopMode.SHUFFLE -> Triple(Icons.Filled.Shuffle, MaterialTheme.colorScheme.primary, "Bucle aleatorio")
-                        LoopMode.SUGGESTIONS -> Triple(Icons.Filled.Stars, MaterialTheme.colorScheme.primary, "Sugerencias")
-                    }
-                    Icon(imageVector = icon, contentDescription = desc, tint = tint, modifier = Modifier.size(32.dp))
+                IconButton(onClick = { controller.toggleShuffle() }) {
+                    Icon(
+                        Icons.Filled.Shuffle,
+                        contentDescription = if (state.shuffleEnabled) "Aleatorio activado" else "Aleatorio desactivado",
+                        tint = if (state.shuffleEnabled) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(28.dp)
+                    )
                 }
                 IconButton(onClick = { controller.previous() }, enabled = state.hasPrevious) {
                     Icon(Icons.Filled.SkipPrevious, contentDescription = "Anterior", modifier = Modifier.size(48.dp))
@@ -178,19 +185,120 @@ fun PlayerScreen(onBack: () -> Unit) {
                 IconButton(onClick = { controller.next() }, enabled = state.hasNext) {
                     Icon(Icons.Filled.SkipNext, contentDescription = "Siguiente", modifier = Modifier.size(48.dp))
                 }
+                IconButton(onClick = { controller.cycleRepeatMode() }) {
+                    val (icon, tint, desc) = when (state.repeatMode) {
+                        RepeatMode.OFF -> Triple(Icons.Filled.Repeat, MaterialTheme.colorScheme.onSurfaceVariant, "Repetición desactivada")
+                        RepeatMode.ALL -> Triple(Icons.Filled.Repeat, MaterialTheme.colorScheme.primary, "Repetir playlist")
+                        RepeatMode.ONE -> Triple(Icons.Filled.RepeatOne, MaterialTheme.colorScheme.primary, "Repetir canción")
+                    }
+                    Icon(imageVector = icon, contentDescription = desc, tint = tint, modifier = Modifier.size(28.dp))
+                }
             }
 
-            if (track.source == TrackSource.REMOTE) {
-                IconButton(onClick = {
-                    coroutineScope.launch {
-                        container.musicRepository.saveTracks(listOf(track))
-                        container.downloadManager.enqueue(track)
-                    }
-                }) {
-                    Icon(Icons.Outlined.Download, contentDescription = "Descargar para offline")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                IconButton(onClick = { controller.toggleAutoplay() }) {
+                    Icon(
+                        Icons.Filled.Stars,
+                        contentDescription = if (state.autoplayEnabled) "Autoplay de sugerencias activado" else "Autoplay de sugerencias desactivado",
+                        tint = if (state.autoplayEnabled) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                val downloadEntry by remember(track.id) {
+                    container.downloadDao.observeById(track.id)
+                }.collectAsStateWithLifecycle(initialValue = null)
+
+                val entry = downloadEntry
+                when {
+                    entry?.status == DownloadStatus.COMPLETED || track.source == TrackSource.DOWNLOADED ->
+                        DownloadStatusRow(
+                            icon = Icons.Outlined.CloudDone,
+                            tint = MaterialTheme.colorScheme.primary,
+                            text = "Descargada"
+                        )
+                    entry?.status == DownloadStatus.RUNNING ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (entry.progress in 1..99) {
+                                CircularProgressIndicator(
+                                    progress = { entry.progress / 100f },
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                            Text(
+                                "Descargando… ${entry.progress}%",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    entry?.status == DownloadStatus.QUEUED ->
+                        DownloadStatusRow(
+                            icon = Icons.Outlined.HourglassEmpty,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "En cola de descarga"
+                        )
+                    entry?.status == DownloadStatus.FAILED ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.clickable {
+                                coroutineScope.launch { container.downloadManager.enqueue(track) }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Outlined.CloudOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                "Fallo al descargar — toca para reintentar",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    track.source == TrackSource.REMOTE ->
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                container.musicRepository.saveTracks(listOf(track))
+                                container.downloadManager.enqueue(track)
+                            }
+                        }) {
+                            Icon(Icons.Outlined.Download, contentDescription = "Descargar para offline")
+                        }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DownloadStatusRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: androidx.compose.ui.graphics.Color,
+    text: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
