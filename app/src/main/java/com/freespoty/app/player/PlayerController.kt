@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class LoopMode { NONE, SEQUENTIAL, SHUFFLE, SUGGESTIONS }
+enum class RepeatMode { OFF, ALL, ONE }
 
 data class PlayerUiState(
     val isPlaying: Boolean = false,
@@ -33,7 +33,9 @@ data class PlayerUiState(
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
     val isBuffering: Boolean = false,
-    val loopMode: LoopMode = LoopMode.NONE,
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: RepeatMode = RepeatMode.OFF,
+    val autoplayEnabled: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -41,6 +43,10 @@ data class PlayerUiState(
  * Thin wrapper around a [MediaController] that resolves [Track]s to media items and exposes
  * a Compose-friendly [StateFlow]. Remote tracks require an async stream resolution step
  * (handled here via [MusicRepository.resolvePlayableUri]) before being passed to ExoPlayer.
+ *
+ * Shuffle y repeat usan los modos nativos de ExoPlayer (shuffleModeEnabled / repeatMode):
+ * con REPEAT_MODE_ALL/ONE el player nunca entra en STATE_ENDED, así el reinicio de playlist
+ * es gapless y no depende de re-resolver URLs (frágil con bot block).
  */
 class PlayerController(
     private val appContext: Context,
@@ -55,8 +61,11 @@ class PlayerController(
 
     private var originalTracks = listOf<Track>()
     private var endedHandled = false
-    private val _loopMode = MutableStateFlow(LoopMode.NONE)
     private var suggestionArtistIndex = 0
+    private val _autoplay = MutableStateFlow(false)
+    // mediaId → ya reintentado con URL fresca tras error. Evita loop infinito de re-resolución.
+    private val errorRetriedIds = mutableSetOf<String>()
+    private var errorRecoveryJob: Job? = null
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -66,18 +75,41 @@ class PlayerController(
             refreshFromPlayer()
         }
 
-        // Si un item falla (URL stale, bot block, 403…), saltar al siguiente en vez de pausar.
+        // Si un item falla (URL stale por loop largo, bot block, 403…): primero intentar
+        // re-resolver una URL fresca y reemplazar el item in-place; si ya se reintentó,
+        // saltar al siguiente. Nunca pausar.
         // NO manejamos STATE_ENDED aquí: ExoPlayer transiciona auto al siguiente cuando hay,
-        // y un seekToNextMediaItem extra desincroniza notification/player (muestra item B
-        // mientras suena C). Recovery de "current acabó sin siguiente en timeline" se hace
-        // tras el addMediaItem de background en startPlayback.
+        // y un seekToNextMediaItem extra desincroniza notification/player.
         override fun onPlayerError(error: PlaybackException) {
             val c = controller ?: return
-            if (c.hasNextMediaItem()) {
+            val failedId = c.currentMediaItem?.mediaId
+            val track = failedId?.let { trackIndex[it] }
+            if (track != null && errorRetriedIds.add(failedId)) {
+                errorRecoveryJob?.cancel()
+                errorRecoveryJob = scope.launch {
+                    val fresh = withContext(Dispatchers.IO) { resolveMediaItem(track) }
+                    val ctrl = controller ?: return@launch
+                    val idx = ctrl.currentMediaItemIndex
+                    if (ctrl.currentMediaItem?.mediaId == failedId) {
+                        ctrl.replaceMediaItem(idx, fresh)
+                        ctrl.prepare()
+                        ctrl.play()
+                    }
+                }
+            } else if (c.hasNextMediaItem()) {
                 c.seekToNextMediaItem()
                 c.prepare()
                 c.play()
+            } else {
+                _state.value = _state.value.copy(
+                    errorMessage = "No se pudo reproducir: ${error.message}"
+                )
             }
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // Transición sana → el item anterior ya no necesita su marca de retry.
+            errorRetriedIds.clear()
         }
     }
 
@@ -108,7 +140,7 @@ class PlayerController(
 
     /**
      * Replaces the current queue and starts at [startIndex]. Saves [tracks] as the canonical
-     * playlist for loop-mode restarts.
+     * playlist used as seed for autoplay suggestions.
      */
     fun playTracks(tracks: List<Track>, startIndex: Int = 0) {
         originalTracks = tracks
@@ -123,6 +155,7 @@ class PlayerController(
         lastAutoSeedId = null
         endedHandled = false
         suggestionArtistIndex = 0
+        errorRetriedIds.clear()
         trackIndex.clear()
         tracks.forEach { trackIndex[it.id] = it }
         playJob = scope.launch {
@@ -158,13 +191,6 @@ class PlayerController(
         }
     }
 
-    private fun restartPlaylist() {
-        if (originalTracks.isEmpty()) return
-        val tracks = if (_loopMode.value == LoopMode.SHUFFLE) originalTracks.shuffled()
-                     else originalTracks
-        startPlayback(tracks, 0)
-    }
-
     // Si el current acabó (STATE_ENDED) y NO había siguiente en timeline, ExoPlayer
     // queda parado. Cuando llega el item del background, hay que arrancarlo manualmente.
     private fun rescueIfEnded(c: MediaController) {
@@ -181,24 +207,49 @@ class PlayerController(
 
     fun togglePlayPause() {
         val c = controller ?: return
-        if (c.isPlaying) c.pause() else c.play()
+        when {
+            c.isPlaying -> c.pause()
+            // Cola terminada: play() solo no rearranca desde STATE_ENDED → volver al inicio.
+            c.playbackState == Player.STATE_ENDED -> {
+                c.seekTo(0, 0L)
+                c.prepare()
+                c.play()
+            }
+            else -> c.play()
+        }
     }
 
     fun next() = controller?.seekToNextMediaItem()
     fun previous() = controller?.seekToPreviousMediaItem()
     fun seekTo(ms: Long) = controller?.seekTo(ms)
 
-    fun cycleLoopMode() {
+    fun toggleShuffle() {
         val c = controller ?: return
-        val next = when (_loopMode.value) {
-            LoopMode.NONE -> LoopMode.SEQUENTIAL
-            LoopMode.SEQUENTIAL -> LoopMode.SHUFFLE
-            LoopMode.SHUFFLE -> LoopMode.SUGGESTIONS
-            LoopMode.SUGGESTIONS -> LoopMode.NONE
+        c.shuffleModeEnabled = !c.shuffleModeEnabled
+        refreshFromPlayer()
+    }
+
+    fun cycleRepeatMode() {
+        val c = controller ?: return
+        c.repeatMode = when (c.repeatMode) {
+            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+            else -> Player.REPEAT_MODE_OFF
         }
-        _loopMode.value = next
-        // SHUFFLE usa el modo nativo de ExoPlayer para aleatorizar el orden durante la reproducción.
-        c.shuffleModeEnabled = (next == LoopMode.SHUFFLE)
+        refreshFromPlayer()
+    }
+
+    fun toggleAutoplay() {
+        _autoplay.value = !_autoplay.value
+        val c = controller
+        if (_autoplay.value && c != null) {
+            // Si ya estamos al final, lanzar búsqueda inmediata.
+            maybeAutoQueue(c, _state.value.currentTrack)
+            if (c.playbackState == Player.STATE_ENDED && !c.hasNextMediaItem()) {
+                autoQueueJob?.cancel()
+                autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
+            }
+        }
         refreshFromPlayer()
     }
 
@@ -209,7 +260,6 @@ class PlayerController(
         val item = c.currentMediaItem
         val trackId = item?.mediaId
         val track = trackId?.let { trackIndex[it] }
-        val loopMode = _loopMode.value
 
         _state.value = _state.value.copy(
             isPlaying = c.isPlaying,
@@ -219,24 +269,24 @@ class PlayerController(
             hasNext = c.hasNextMediaItem(),
             hasPrevious = c.hasPreviousMediaItem(),
             isBuffering = c.playbackState == Player.STATE_BUFFERING,
-            loopMode = loopMode
+            shuffleEnabled = c.shuffleModeEnabled,
+            repeatMode = when (c.repeatMode) {
+                Player.REPEAT_MODE_ALL -> RepeatMode.ALL
+                Player.REPEAT_MODE_ONE -> RepeatMode.ONE
+                else -> RepeatMode.OFF
+            },
+            autoplayEnabled = _autoplay.value
         )
 
-        // Detect end-of-queue and act according to loop mode.
-        // Guard with endedHandled to avoid re-triggering on repeated onEvents while STATE_ENDED.
+        // Fin de cola real (solo posible con repeat OFF): si autoplay activo, buscar similares.
+        // endedHandled evita relanzar en cada onEvents mientras seguimos en STATE_ENDED;
+        // appendSimilarFromPlaylist ya reintenta con varios artistas internamente.
         if (c.playbackState == Player.STATE_ENDED && !c.hasNextMediaItem()) {
-            if (!endedHandled) {
+            if (!endedHandled && _autoplay.value) {
                 endedHandled = true
-                when (loopMode) {
-                    LoopMode.SEQUENTIAL, LoopMode.SHUFFLE -> restartPlaylist()
-                    LoopMode.SUGGESTIONS -> {
-                        // Reset seed lock so appendSimilarFromPlaylist can fire a fresh search
-                        lastAutoSeedId = null
-                        autoQueueJob?.cancel()
-                        autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
-                    }
-                    LoopMode.NONE -> Unit
-                }
+                lastAutoSeedId = track?.id
+                autoQueueJob?.cancel()
+                autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
             }
         } else if (c.playbackState != Player.STATE_ENDED) {
             endedHandled = false
@@ -246,7 +296,7 @@ class PlayerController(
     }
 
     private fun maybeAutoQueue(c: MediaController, current: Track?) {
-        if (_loopMode.value != LoopMode.SUGGESTIONS) return
+        if (!_autoplay.value) return
         if (current == null) return
         if (current.id == lastAutoSeedId) return
         val remaining = c.mediaItemCount - c.currentMediaItemIndex - 1
@@ -256,19 +306,29 @@ class PlayerController(
         autoQueueJob = scope.launch { appendSimilarFromPlaylist() }
     }
 
-    // Rota por cada artista distinto de la playlist original en orden circular, de forma que
-    // las sugerencias varían de artista en cada llamada en vez de repetir siempre el mismo.
+    // Rota por cada artista distinto de la playlist original en orden circular. Si un artista
+    // no da resultados (red caída, bot block, sin similares) prueba con los siguientes antes
+    // de rendirse, para que el fin de cola no se quede mudo por un fallo puntual.
     private suspend fun appendSimilarFromPlaylist() {
-        val excluded = trackIndex.keys.toSet()
         val artists = originalTracks.mapNotNull { it.artist?.trim()?.takeIf { s -> s.isNotEmpty() } }.distinct()
         if (artists.isEmpty()) return
-        val artist = artists[suggestionArtistIndex % artists.size]
-        suggestionArtistIndex++
-        val seed = originalTracks.firstOrNull { it.artist?.trim() == artist } ?: return
-        val similar = runCatching {
-            repository.similarTo(seed, excluded, limit = 5)
-        }.getOrNull().orEmpty()
-        if (similar.isEmpty()) return
+        val attempts = minOf(artists.size, 3)
+        var similar = emptyList<Track>()
+        for (attempt in 0 until attempts) {
+            val excluded = trackIndex.keys.toSet()
+            val artist = artists[suggestionArtistIndex % artists.size]
+            suggestionArtistIndex++
+            val seed = originalTracks.firstOrNull { it.artist?.trim() == artist } ?: continue
+            similar = runCatching {
+                repository.similarTo(seed, excluded, limit = 5)
+            }.getOrNull().orEmpty()
+            if (similar.isNotEmpty()) break
+        }
+        if (similar.isEmpty()) {
+            // Permitir nuevo intento en el próximo evento de fin de cola.
+            endedHandled = false
+            return
+        }
         for (t in similar) {
             val item = withContext(Dispatchers.IO) { resolveMediaItem(t) }
             trackIndex[t.id] = t
