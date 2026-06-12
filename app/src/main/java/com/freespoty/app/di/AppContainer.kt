@@ -51,7 +51,7 @@ class AppContainer(context: Context) {
 
     val downloadDao: DownloadDao = database.downloadDao()
 
-    val downloadManager: DownloadManager = DownloadManager(appContext, downloadDao)
+    val downloadManager: DownloadManager = DownloadManager(appContext, downloadDao, musicRepository)
 
     val spotifyScraper: SpotifyPlaylistScraper = SpotifyPlaylistScraper()
 

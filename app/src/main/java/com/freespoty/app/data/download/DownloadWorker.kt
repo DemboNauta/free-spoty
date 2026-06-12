@@ -36,23 +36,30 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) :
         downloadDao.updateProgress(trackId, DownloadStatus.RUNNING, 0)
 
         try {
-            val streamUrl = when (track.source) {
-                TrackSource.REMOTE -> {
-                    val remoteId = track.remoteId
-                        ?: return@withContext failWith(downloadDao, trackId, "Sin ID remoto")
-                    YouTubeSource.ensureInitialized()
-                    val resolved = try {
-                        youtube.resolveStream(remoteId)
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "resolveStream failed trackId=$trackId remoteId=$remoteId", t)
-                        return@withContext failWith(downloadDao, trackId, "Resolve: ${t.message}")
-                    }
-                    Log.i(TAG, "resolved $trackId mime=${resolved.mimeType} urlLen=${resolved.audioUrl.length}")
-                    resolved.audioUrl
-                }
-                TrackSource.LOCAL, TrackSource.DOWNLOADED ->
-                    return@withContext failWith(downloadDao, trackId, "La pista ya es local")
+            if (track.source == TrackSource.LOCAL) {
+                return@withContext failWith(downloadDao, trackId, "La pista ya es local")
             }
+            if (track.source == TrackSource.DOWNLOADED) {
+                // Ya descargada: si el archivo sigue ahí, dar por completada; si se
+                // perdió (borrado externo, bug antiguo), re-descargar vía remoteId.
+                val existingPath = android.net.Uri.parse(track.uri).path
+                if (existingPath != null && File(existingPath).exists()) {
+                    downloadDao.markCompleted(trackId, existingPath)
+                    return@withContext Result.success()
+                }
+            }
+
+            val remoteId = track.remoteId ?: trackId.removePrefix("yt-").takeIf { it != trackId }
+                ?: return@withContext failWith(downloadDao, trackId, "Sin ID remoto")
+            YouTubeSource.ensureInitialized()
+            val resolved = try {
+                youtube.resolveStream(remoteId)
+            } catch (t: Throwable) {
+                Log.w(TAG, "resolveStream failed trackId=$trackId remoteId=$remoteId", t)
+                return@withContext failWith(downloadDao, trackId, "Resolve: ${t.message}")
+            }
+            Log.i(TAG, "resolved $trackId mime=${resolved.mimeType} urlLen=${resolved.audioUrl.length}")
+            val streamUrl = resolved.audioUrl
 
             val targetDir = File(applicationContext.filesDir, "downloads").apply { mkdirs() }
             val targetFile = File(targetDir, "$trackId.m4a")

@@ -13,13 +13,15 @@ import com.freespoty.app.data.db.dao.DownloadDao
 import com.freespoty.app.data.db.entities.DownloadEntry
 import com.freespoty.app.data.db.entities.DownloadStatus
 import com.freespoty.app.data.db.entities.Track
+import com.freespoty.app.data.repository.MusicRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class DownloadManager(
     private val context: Context,
-    private val downloadDao: DownloadDao
+    private val downloadDao: DownloadDao,
+    private val repository: MusicRepository
 ) {
     private val workManager get() = WorkManager.getInstance(context)
 
@@ -67,10 +69,13 @@ class DownloadManager(
     }
 
     suspend fun delete(trackId: String) {
+        val entry = downloadDao.findById(trackId)
         withContext(Dispatchers.IO) {
-            downloadDao.findById(trackId)?.localPath?.let { File(it).delete() }
+            entry?.localPath?.let { File(it).delete() }
         }
         downloadDao.deleteById(trackId)
+        // El track sigue en playlists: devolverlo a streaming para que siga sonando.
+        repository.revertTrackToRemote(trackId, entry?.remoteId)
     }
 
     private companion object {

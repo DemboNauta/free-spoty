@@ -90,13 +90,35 @@ class YouTubeSource {
         val items = mutableListOf<StreamInfoItem>()
         items += extractor.initialPage.items.filterIsInstance<StreamInfoItem>()
         var nextPage = extractor.initialPage.nextPage
-        var safety = 5
+        // Los mixes (list=RD...) generan páginas infinitas: cortar antes.
+        var safety = if (isMixUrl(url)) 1 else 5
         while (nextPage != null && safety-- > 0) {
             val page = extractor.getPage(nextPage)
             items += page.items.filterIsInstance<StreamInfoItem>()
             nextPage = page.nextPage
         }
-        name to items.map { it.toTrack() }
+        name to items.map { it.toTrack() }.distinctBy { it.id }
+    }
+
+    /**
+     * Fetch del "Mix" auto-generado de YouTube para un vídeo (radio RD<videoId>).
+     * Son las recomendaciones del propio algoritmo de YouTube para esa canción:
+     * mucho mejor señal que buscar por artista.
+     */
+    suspend fun fetchMix(videoId: String, limit: Int = 30): List<Track> = withContext(Dispatchers.IO) {
+        ensureInitialized()
+        val extractor = youtube.getPlaylistExtractor(mixUrl(videoId))
+        extractor.fetchPage()
+        val items = mutableListOf<StreamInfoItem>()
+        items += extractor.initialPage.items.filterIsInstance<StreamInfoItem>()
+        var nextPage = extractor.initialPage.nextPage
+        var safety = 3
+        while (items.size < limit && nextPage != null && safety-- > 0) {
+            val page = extractor.getPage(nextPage)
+            items += page.items.filterIsInstance<StreamInfoItem>()
+            nextPage = page.nextPage
+        }
+        items.map { it.toTrack() }.distinctBy { it.id }.take(limit)
     }
 
     private fun StreamInfoItem.toTrack(): Track {
@@ -123,6 +145,11 @@ class YouTubeSource {
         if (startsWith("http")) this else "https://www.youtube.com/watch?v=$this"
 
     companion object {
+        fun mixUrl(videoId: String): String =
+            "https://www.youtube.com/watch?v=$videoId&list=RD$videoId"
+
+        fun isMixUrl(url: String): Boolean = url.contains("list=RD")
+
         @Volatile private var initialized = false
 
         fun ensureInitialized() {

@@ -114,12 +114,24 @@ class MusicRepository(
      */
     suspend fun resolvePlayableUri(track: Track): String = when (track.source) {
         TrackSource.LOCAL -> track.uri
-        TrackSource.DOWNLOADED -> track.uri
-        TrackSource.REMOTE -> {
-            val remoteId = track.remoteId ?: track.id.removePrefix("yt-")
-            YouTubeSource.ensureInitialized()
-            youtubeSource.resolveStream(remoteId).audioUrl
+        TrackSource.DOWNLOADED -> {
+            // El archivo puede haber desaparecido (borrado de descarga, clear data,
+            // bug antiguo). Si no existe, auto-reparar: volver a REMOTE y stremear.
+            val path = Uri.parse(track.uri).path
+            if (path != null && File(path).exists()) {
+                track.uri
+            } else {
+                revertTrackToRemote(track.id, track.remoteId)
+                resolveRemote(track)
+            }
         }
+        TrackSource.REMOTE -> resolveRemote(track)
+    }
+
+    private suspend fun resolveRemote(track: Track): String {
+        val remoteId = track.remoteId ?: track.id.removePrefix("yt-")
+        YouTubeSource.ensureInitialized()
+        return youtubeSource.resolveStream(remoteId).audioUrl
     }
 
     /** Persist a remote track as DOWNLOADED, pointing at the local file. */
@@ -128,5 +140,16 @@ class MusicRepository(
         // NO usar upsert(REPLACE): cascadea sobre playlist_tracks (FK onDelete=CASCADE)
         // y borra el track de todas las playlists.
         trackDao.updateLocalSource(trackId, localUri, TrackSource.DOWNLOADED)
+    }
+
+    /**
+     * Vuelve a dejar el track como REMOTE (streaming). Se usa al borrar una descarga
+     * para que la pista siga siendo reproducible vía streaming y no apunte a un
+     * archivo inexistente.
+     */
+    suspend fun revertTrackToRemote(trackId: String, remoteId: String?) {
+        val id = remoteId ?: trackId.removePrefix("yt-")
+        val watchUrl = "https://www.youtube.com/watch?v=$id"
+        trackDao.updateLocalSource(trackId, watchUrl, TrackSource.REMOTE)
     }
 }
