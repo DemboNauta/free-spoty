@@ -44,7 +44,7 @@ APK queda en `app/build/outputs/apk/debug/app-debug.apk`. Copiado a `FreeSpoty-d
 
 - AGP 8.5.0, Kotlin 2.0.0, KSP 2.0.0-1.0.21
 - compose BOM 2024.09.02 — **NO bajar a 2024.06**: hay bug `LocalLifecycleOwner not present` (crash al arrancar) que requiere lifecycle 2.8.4 + activity-compose 1.9.2 + BOM ≥ 2024.09.
-- NewPipeExtractor `v0.26.1` (jitpack `com.github.TeamNewPipe:NewPipeExtractor`). Versiones < 0.24.6 dan `Could not get ytInitialData`.
+- NewPipeExtractor `v0.26.3` (jitpack `com.github.TeamNewPipe:NewPipeExtractor`). Versiones < 0.24.6 dan `Could not get ytInitialData`.
 - Media3 1.4.1, Room 2.6.1. 1.4+ aporta `ExoPlayer.PreloadConfiguration` (usado en `PlayerService` con 30s target) → pre-buffer agresivo del siguiente item → transición gapless.
 
 ## Trampas conocidas YouTube / NewPipeExtractor

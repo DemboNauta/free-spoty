@@ -72,13 +72,21 @@ class YouTubeSource {
         val url = remoteId.toYouTubeUrl()
         val extractor: StreamExtractor = youtube.getStreamExtractor(url)
         extractor.fetchPage()
-        val streams = extractor.audioStreams
         // Prefer the highest bitrate m4a/mp4 stream — best compatibility with ExoPlayer.
-        val best = streams
+        val bestAudio = extractor.audioStreams
             .filter { it.url.isNullOrBlank().not() }
             .maxByOrNull { it.averageBitrate.takeIf { b -> b > 0 } ?: it.bitrate }
+        if (bestAudio != null) {
+            return@withContext StreamUrls(bestAudio.url!!, bestAudio.format?.mimeType)
+        }
+        // Fallback: cuando YouTube sirve respuestas solo-SABR puede no haber streams
+        // de audio separados; los streams muxed (vídeo+audio) siguen sirviendo —
+        // ExoPlayer reproduce solo la pista de audio sin problema.
+        val muxed = extractor.videoStreams
+            .filter { it.url.isNullOrBlank().not() && !it.isVideoOnly }
+            .maxByOrNull { it.resolution?.removeSuffix("p")?.toIntOrNull() ?: 0 }
             ?: error("No audio streams available")
-        StreamUrls(best.url!!, best.format?.mimeType)
+        StreamUrls(muxed.url!!, muxed.format?.mimeType)
     }
 
     /** Fetch a YouTube playlist (regular playlist URL with list= param). */
